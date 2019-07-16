@@ -3,7 +3,6 @@ import struct
 import sched, time
 import threading
 from datetime import datetime
-from pytimeparse.timeparse import timeparse
 
 '''
    Create the virtual can port:
@@ -30,7 +29,7 @@ def validLine(line):
 ## 8672.21581 1  1930       Rx D 8  10  12  22 182 255 191 255 224
 def toCanFrame(line):
     parts = (" ".join(line.split()).split())
-    ts = timeparse("{}s".format(parts[0]))
+    ts = float(parts[0])
     canId = int(parts[2])
     data = bytearray([int(i) for i in parts[6:14]])
     return ts, canId, data
@@ -54,15 +53,12 @@ except OSError:
 sched = sched.scheduler(time.time, time.sleep)
 startTime = time.time()
 with open(filepath) as fp:
-    lastTime = startTime
     for cnt, line in enumerate(fp):
         if validLine(line):
             ts, canId, data = toCanFrame(line)
             time = datetime.now().strftime("%H:%M:%S.%f")
             print("send at {}: canId={:04} data={}".format(time, canId, data.hex()))
-            newTime = startTime + ts
-            assert newTime > lastTime, "Wrong time increment";
-            lastTime = newTime
-            sched.enterabs(newTime, 1, lambda x, y: send(x, y), (canId, data,))
+            assert ts > 0.0, "Wrong time increment";
+            sched.enterabs(startTime + ts, 1, lambda x, y: send(x, y), (canId, data,))
             # Start a thread to run the events
             threading.Thread(target=sched.run).start()
