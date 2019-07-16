@@ -54,17 +54,15 @@ except OSError:
 sched = sched.scheduler(time.time, time.sleep)
 startTime = time.time()
 with open(filepath) as fp:
-    lastTime = startTime;
+    lastTime = startTime
     for cnt, line in enumerate(fp):
         if validLine(line):
             ts, canId, data = toCanFrame(line)
             time = datetime.now().strftime("%H:%M:%S.%f")
             print("send at {}: canId={:04} data={}".format(time, canId, data.hex()))
-            fun = lambda x, y: send(x, y)
-            newTime = startTime + ts;
+            newTime = startTime + ts
             assert newTime > lastTime, "Wrong time increment";
-            lastTime = newTime;
-            sched.enterabs(newTime, 1, fun, (canId, data,))
-
+            lastTime = newTime
+            sched.enterabs(newTime, 1, lambda x, y: send(x, y), (canId, data,))
             # Start a thread to run the events
             threading.Thread(target=sched.run).start()
