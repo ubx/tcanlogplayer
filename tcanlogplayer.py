@@ -1,7 +1,8 @@
-from datetime import datetime
 import socket, sys
 import struct
 import sched, time
+import threading
+from datetime import datetime
 from pytimeparse.timeparse import timeparse
 
 '''
@@ -61,5 +62,8 @@ with open(filepath) as fp:
             print("send at {}: canId={:04} data={}".format(time, canId, data.hex()))
             fun = lambda x, y: send(x, y)
             sched.enterabs(startTime + ts, 1, fun, (canId, data,))
-            sched.run()
+
+            # Start a thread to run the events
+            threading.Thread(target=sched.run).start()
+
 fp.close();
