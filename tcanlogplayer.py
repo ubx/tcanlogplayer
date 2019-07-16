@@ -65,5 +65,3 @@ with open(filepath) as fp:
 
             # Start a thread to run the events
             threading.Thread(target=sched.run).start()
-
-fp.close();
