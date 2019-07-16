@@ -11,9 +11,7 @@ from pytimeparse.timeparse import timeparse
 '''
 interface = "vcan0"
 filepath = 'PermanentLogging.ASC'
-
-
-##filepath = 'shortlog.txt'
+##filepath = 'shortlog.txt' ## for testing
 
 
 def validLine(line):
