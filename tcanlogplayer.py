@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import socket, sys
 import struct
 import sched, time
@@ -11,7 +12,7 @@ from datetime import datetime
 '''
 interface = "vcan0"
 filepath = 'PermanentLogging.ASC'
-##filepath = 'shortlog.txt' ## for testing
+## filepath = 'shortlog.txt' ## for testing
 
 
 def validLine(line):
@@ -43,6 +44,12 @@ def send(canId, data):
     sock.send(can_pkt)
 
 
+def canIdStatistics(canIds, canId):
+    if canId not in canIds:
+        canIds[canId] = 1
+    canIds[canId] = canIds[canId] + 1
+
+
 sock = socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
 try:
     sock.bind((interface,))
@@ -52,13 +59,29 @@ except OSError:
 
 sched = sched.scheduler(time.time, time.sleep)
 startTime = time.time()
+canIds = {}
+print ("Input file={}".format(filepath))
+print ("Count canId occurens...")
+with open(filepath) as fp:
+    for cnt, line in enumerate(fp):
+        if validLine(line):
+            ts, canId, data = toCanFrame(line)
+            assert ts > 0.0, "Wrong time increment";
+            canIdStatistics(canIds, canId)
+
+print (sorted(canIds.items(), key=lambda kv: kv[0], reverse=True))
+print (sorted(canIds.items(), key=lambda kv: kv[1], reverse=True))
+
+print ("start sending to device {} ...".format(interface))
 with open(filepath) as fp:
     for cnt, line in enumerate(fp):
         if validLine(line):
             ts, canId, data = toCanFrame(line)
             time = datetime.now().strftime("%H:%M:%S.%f")
-            print("send at {}: canId={:04} data={}".format(time, canId, data.hex()))
-            assert ts > 0.0, "Wrong time increment";
+            ##print("send at {}: canId={:04} data={}".format(time, canId, data.hex()))
             sched.enterabs(startTime + ts, 1, lambda x, y: send(x, y), (canId, data,))
             # Start a thread to run the events
             threading.Thread(target=sched.run).start()
+
+
+
