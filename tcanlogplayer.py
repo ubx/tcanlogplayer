@@ -32,8 +32,9 @@ def toCanFrame(line):
     parts = (" ".join(line.split()).split())
     ts = float(parts[0])
     canId = int(parts[2])
+    nodeId = int(parts[5])
     data = bytearray([int(i) for i in parts[6:14]])
-    return ts, canId, data
+    return ts, canId, data, nodeId
 
 
 def send(canId, data):
@@ -44,11 +45,10 @@ def send(canId, data):
     sock.send(can_pkt)
 
 
-def canIdStatistics(canIds, canId):
-    if canId not in canIds:
-        canIds[canId] = 1
-    canIds[canId] = canIds[canId] + 1
-
+def statistics(ids, id):
+    if id not in ids:
+        ids[id] = 1
+    ids[id] = ids[id] + 1
 
 sock = socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
 try:
@@ -58,30 +58,30 @@ except OSError:
     quit()
 
 sched = sched.scheduler(time.time, time.sleep)
-startTime = time.time()
+startTime = time.time() 
+
 canIds = {}
-print ("Input file={}".format(filepath))
-print ("Count canId occurens...")
-with open(filepath) as fp:
-    for cnt, line in enumerate(fp):
-        if validLine(line):
-            ts, canId, data = toCanFrame(line)
-            assert ts > 0.0, "Wrong time increment";
-            canIdStatistics(canIds, canId)
-
-print (sorted(canIds.items(), key=lambda kv: kv[0], reverse=True))
-print (sorted(canIds.items(), key=lambda kv: kv[1], reverse=True))
-
+nodeIds = {}
 print ("start sending to device {} ...".format(interface))
 with open(filepath) as fp:
     for cnt, line in enumerate(fp):
         if validLine(line):
-            ts, canId, data = toCanFrame(line)
+            ts, canId, data, nodeId = toCanFrame(line)
+            assert ts > 0.0, "Wrong time increment";
+            statistics(canIds, canId)
+            statistics(nodeIds, nodeId)
             time = datetime.now().strftime("%H:%M:%S.%f")
-            ##print("send at {}: canId={:04} data={}".format(time, canId, data.hex()))
+            print("send at {}: canId={:04} data={}".format(time, canId, data.hex()))
             sched.enterabs(startTime + ts, 1, lambda x, y: send(x, y), (canId, data,))
             # Start a thread to run the events
             threading.Thread(target=sched.run).start()
+
+print ("canId statistics")
+print (sorted(canIds.items(), key=lambda kv: kv[0], reverse=True))
+print (sorted(canIds.items(), key=lambda kv: kv[1], reverse=True))
+print ("nodeId statistics")
+print (sorted(nodeIds.items(), key=lambda kv: kv[0], reverse=True))
+print (sorted(nodeIds.items(), key=lambda kv: kv[1], reverse=True))
 
 
 
