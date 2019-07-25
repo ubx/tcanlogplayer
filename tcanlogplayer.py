@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import socket, sys
 import struct
 import sched, time
@@ -57,10 +58,11 @@ except OSError:
     quit()
 
 filterCanIds = set()
-print("reading filter file {}".format(filterpath))
-with open(filterpath) as fp:
-    for cnt, line in enumerate(fp):
-        filterCanIds.add(int(line))
+if os.path.isfile(filterpath):
+    print("reading filter file {}".format(filterpath))
+    with open(filterpath) as fp:
+        for cnt, line in enumerate(fp):
+            filterCanIds.add(int(line))
 
 sched = sched.scheduler(time.time, time.sleep)
 startTime = time.time()
