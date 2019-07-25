@@ -3,7 +3,6 @@ import os
 import socket, sys
 import struct
 import sched, time
-import threading
 from datetime import datetime
 
 '''
@@ -58,32 +57,46 @@ except OSError:
     quit()
 
 filterCanIds = set()
+
 if os.path.isfile(filterpath):
     print("reading filter file {}".format(filterpath))
     with open(filterpath) as fp:
-        for cnt, line in enumerate(fp):
+        for line in fp:
             filterCanIds.add(int(line))
 
-sched = sched.scheduler(time.time, time.sleep)
+#sched = sched.scheduler(time.time, time.sleep)
 startTime = time.time()
+
+skip_rows = 500000
 
 canIds = {}
 nodeIds = {}
+lastTime = 0 
 print("start sending to device {} ...".format(interface))
 with open(filepath) as fp:
     for cnt, line in enumerate(fp):
+        if cnt < skip_rows:
+            continue
         if validLine(line):
             ts, canId, data, nodeId = toCanFrame(line)
+            if cnt == skip_rows:
+                lastTime = ts
             assert ts > 0.0, "Wrong time increment";
             if len(filterCanIds) == 0 or canId in filterCanIds:
                 statistics(canIds, canId)
                 statistics(nodeIds, nodeId)
-                time = datetime.now().strftime("%H:%M:%S.%f")
-                print("send at {}: canId={:04} data={}".format(time, canId, data.hex()))
-                sched.enterabs(startTime + ts, 1, lambda x, y: send(x, y), (canId, data,))
-                sched.run()
-                # Start a thread to run the events
-                ### threading.Thread(target=sched.run).start()  # to many threads are created if we user filter !!
+                
+                dt = ts - lastTime
+                time.sleep(dt)
+                time_now = datetime.now().strftime("%H:%M:%S.%f")
+                print("send at {}: canId={:04} data={}".format(time_now, canId, data.hex()))
+                send(canId, data)
+
+                #sched.enterabs(startTime + ts, 1, lambda x, y: send(x, y), (canId, data,))
+                #sched.run()
+                lastTime = ts
+
+
 print("canId statistics")
 print(sorted(canIds.items(), key=lambda kv: kv[0], reverse=True))
 print(sorted(canIds.items(), key=lambda kv: kv[1], reverse=True))
