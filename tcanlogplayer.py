@@ -49,6 +49,14 @@ def statistics(ids, id):
         ids[id] = 1
     ids[id] = ids[id] + 1
 
+## stolen from: https://gist.github.com/vladignatyev/06860ec2040cb497f0f3
+def progress(count, total, suffix=''):
+    bar_len = 60
+    filled_len = int(round(bar_len * count / float(total)))
+    percents = round(100.0 * count / float(total), 1)
+    bar = '=' * filled_len + '-' * (bar_len - filled_len)
+    print('\r[%s] %s%s ...%s' % (bar, percents, '%', suffix), end='', flush=True)
+
 sock = socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
 try:
     sock.bind((interface,))
@@ -64,14 +72,18 @@ if os.path.isfile(filterpath):
         for line in fp:
             filterCanIds.add(int(line))
 
-#sched = sched.scheduler(time.time, time.sleep)
+sched = sched.scheduler(time.time, time.sleep)
 startTime = time.time()
 
-skip_rows = 500000
+##skip_rows = 500000
+skip_rows = 50
 
 canIds = {}
 nodeIds = {}
-lastTime = 0 
+lastTime = 0
+queue_max = 0
+num_lines = sum(1 for line in open(filepath))
+
 print("start sending to device {} ...".format(interface))
 with open("candump.log", "w") as logfile:
     with open(filepath) as fp:
@@ -88,19 +100,22 @@ with open("candump.log", "w") as logfile:
                     statistics(nodeIds, nodeId)
 
                     dt = ts - lastTime
-                    time.sleep(dt)
+                    ##time.sleep(dt)
                     time_now = datetime.now().strftime("%H:%M:%S.%f")
-                    print("send at {}: canId={:04} data={}".format(time_now, canId, data.hex().upper()))
+                    ##print("send at {}: canId={:04} data={}".format(time_now, canId, data.hex().upper()))
 
                     # write directly a file for canplayer
                     # "1563281268.048045) vcan0 78A#0A0C343602490000"
                     logfile.write("({:f}) vcan0 {:X}#{}\n".format(startTime + ts, canId, data.hex().upper()))
                     send(canId, data)
 
-                    #sched.enterabs(startTime + ts, 1, lambda x, y: send(x, y), (canId, data,))
-                    #sched.run()
+                    sched.enterabs(startTime + ts, 1, lambda x, y: send(x, y), (canId, data,))
+                    queue_max = max(queue_max,len(sched.queue))
+                    sched.run()
                     lastTime = ts
+            progress(cnt, num_lines, lastTime)
 
+print('queue_max',queue_max)
 print("canId statistics")
 print(sorted(canIds.items(), key=lambda kv: kv[0], reverse=True))
 print(sorted(canIds.items(), key=lambda kv: kv[1], reverse=True))
