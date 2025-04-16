@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import os
 import socket, sys
 import struct
@@ -10,16 +11,21 @@ from datetime import datetime
       sudo ip link add dev vcan0 type vcan
       sudo ip link set up vcan0
 '''
+
+parser = argparse.ArgumentParser(description="Replay a CAN logfile in ASC format to the vcan0 interface")
+parser.add_argument('file', metavar='file', type=str, help='CAN logfile in ASC format')
+parser.add_argument('-filter', metavar='filter', type=str, default='filterNone.txt',
+                    help='filter for message id, play only message in filter, default=filterNone.txt')
+args = parser.parse_args()
+
 interface = "vcan0"
-filepath = 'PermanentLogging.ASC'
-## filepath = 'shortlog.txt' ## for testing
-
-filterpath = 'filter.txt'
-
+filepath = args.file
+filterpath = args.filter
 
 def validLine(line):
     try:
-        return "Errorframe" not in line \
+        return not line.startswith('*') \
+               and"Errorframe" not in line \
                and "Begin Triggerblock" not in line \
                and "base dec timestamps absolute" not in line \
                and "End Triggerblock" not in line \
@@ -32,7 +38,11 @@ def validLine(line):
 def toCanFrame(line):
     parts = (" ".join(line.split()).split())
     ts = float(parts[0])
-    canId = int(parts[2])
+    ch = int(parts[1])
+    if ch != 0:
+       canId = int(parts[2])
+    else:
+        canId = 99999
     nodeId = int(parts[5])
     data = bytearray([int(i) for i in parts[6:14]])
     return ts, canId, data, nodeId
@@ -75,8 +85,7 @@ if os.path.isfile(filterpath):
 sched = sched.scheduler(time.time, time.sleep)
 startTime = time.time()
 
-##skip_rows = 500000
-skip_rows = 50
+skip_rows = 0
 
 canIds = {}
 nodeIds = {}
@@ -106,7 +115,7 @@ with open("candump.log", "w") as logfile:
 
                     # write directly a file for canplayer
                     # "1563281268.048045) vcan0 78A#0A0C343602490000"
-                    logfile.write("({:f}) vcan0 {:X}#{}\n".format(startTime + ts, canId, data.hex().upper()))
+                    logfile.write("({:f}) {:s} {:X}#{}\n".format(startTime + ts, interface, canId, data.hex().upper()))
                     send(canId, data)
 
                     sched.enterabs(startTime + ts, 1, lambda x, y: send(x, y), (canId, data,))
