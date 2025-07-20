@@ -1,133 +1,153 @@
 #!/usr/bin/env python3
 import argparse
 import os
-import socket, sys
+import sched
+import socket
 import struct
-import sched, time
-from datetime import datetime
+import sys
+import time
+from collections import defaultdict
 
 '''
-   Create the virtual can port:
-      sudo ip link add dev vcan0 type vcan
-      sudo ip link set up vcan0
+Create the virtual can port:
+   sudo ip link add dev vcan0 type vcan
+   sudo ip link set up vcan0
 '''
 
-parser = argparse.ArgumentParser(description="Replay a CAN logfile in ASC format to the vcan0 interface")
-parser.add_argument('file', metavar='file', type=str, help='CAN logfile in ASC format')
-parser.add_argument('-filter', metavar='filter', type=str, default='filterNone.txt',
-                    help='filter for message id, play only message in filter, default=filterNone.txt')
-args = parser.parse_args()
 
-interface = "vcan0"
-filepath = args.file
-filterpath = args.filter
+def setup_parser():
+    parser = argparse.ArgumentParser(
+        description="Replay a CAN logfile in ASC format to the vcan0 interface")
+    parser.add_argument('file', type=str, help='CAN logfile in ASC format')
+    parser.add_argument('-filter', type=str, default='filterNone.txt',
+                        help='filter for message id, default=filterNone.txt')
+    parser.add_argument('--convert-only', action='store_true',
+                        help='only convert the file without sending CAN frames')
+    return parser.parse_args()
 
-def validLine(line):
-    try:
-        return not line.startswith('*') \
-               and"Errorframe" not in line \
-               and "Begin Triggerblock" not in line \
-               and "base dec timestamps absolute" not in line \
-               and "End Triggerblock" not in line \
-               and " Tx " not in line \
-               and "log trigger event Info:" not in line
-    except OSError:
-        return False
 
-## "8672.21581 1  1930       Rx D 8  10  12  22 182 255 191 255 224"
-def toCanFrame(line):
-    parts = (" ".join(line.split()).split())
+def valid_line(line):
+    invalid_prefixes = ('*', 'Begin Triggerblock', 'base dec timestamps absolute',
+                        'End Triggerblock', 'log trigger event Info:')
+    return (not any(line.startswith(p) for p in invalid_prefixes) and
+            "Errorframe" not in line and
+            " Tx " not in line)
+
+
+def to_can_frame(line):
+    parts = line.split()
     ts = float(parts[0])
     ch = int(parts[1])
-    if ch != 0:
-       canId = int(parts[2])
-    else:
-        canId = 99999
-    nodeId = int(parts[5])
-    data = bytearray([int(i) for i in parts[6:14]])
-    return ts, canId, data, nodeId
+    can_id = int(parts[2]) if ch != 0 else 99999
+    node_id = int(parts[5])
+    data = bytearray(int(i) for i in parts[6:14])
+    return ts, can_id, data, node_id
 
-def send(canId, data):
+
+def send_frame(sock, can_id, data):
     ## https://docs.python.org/3/library/struct.html
     ## http://www.bencz.com/hacks/2016/07/10/python-and-socketcan/
     fmt = "<IB3x8s"
-    can_pkt = struct.pack(fmt, canId, len(data), data)
+    can_pkt = struct.pack(fmt, can_id, len(data), data)
     sock.send(can_pkt)
 
-def statistics(ids, id):
-    if id not in ids:
-        ids[id] = 1
-    ids[id] = ids[id] + 1
+
+def setup_socket(interface):
+    try:
+        sock = socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
+        sock.bind((interface,))
+        return sock
+    except OSError as e:
+        sys.stderr.write(f"Could not bind to interface '{interface}': {e}\n")
+        sys.exit(1)
+
+
+def load_filter(filter_path):
+    filter_can_ids = set()
+    if os.path.isfile(filter_path):
+        print(f"reading filter file {filter_path}")
+        with open(filter_path) as fp:
+            filter_can_ids.update(int(line.strip()) for line in fp if line.strip())
+    return filter_can_ids
 
 ## stolen from: https://gist.github.com/vladignatyev/06860ec2040cb497f0f3
-def progress(count, total, suffix=''):
+def progress(count, total, last_time):
     bar_len = 60
     filled_len = int(round(bar_len * count / float(total)))
     percents = round(100.0 * count / float(total), 1)
     bar = '=' * filled_len + '-' * (bar_len - filled_len)
-    print('\r[%s] %s%s ...%s' % (bar, percents, '%', suffix), end='', flush=True)
+    print(f'\r[{bar}] {percents}% ...{last_time}', end='', flush=True)
 
-sock = socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
-try:
-    sock.bind((interface,))
-except OSError:
-    sys.stderr.write("Could not bind to interface '%s'\n" % interface)
-    quit()
 
-filterCanIds = set()
+def main():
+    args = setup_parser()
+    interface = "vcan0"
 
-if os.path.isfile(filterpath):
-    print("reading filter file {}".format(filterpath))
-    with open(filterpath) as fp:
+    # Generate output filename by adding .can to input filename
+    input_path = os.path.abspath(args.file)
+    output_path = f"{input_path}.can"
+    output_dir = os.path.dirname(output_path)
+
+    # Create output directory if it doesn't exist
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    sock = None
+    if not args.convert_only:
+        sock = setup_socket(interface)
+    filter_can_ids = load_filter(args.filter)
+
+    scheduler = sched.scheduler(time.time, time.sleep)
+    start_time = time.time()
+
+    can_ids = defaultdict(int)
+    node_ids = defaultdict(int)
+    queue_max = 0
+
+    with open(output_path, "w") as logfile, open(args.file) as fp:
+        # Read and filter lines first
+        valid_lines = []
         for line in fp:
-            filterCanIds.add(int(line))
+            if valid_line(line):
+                valid_lines.append(line)
+        num_lines = len(valid_lines)
 
-sched = sched.scheduler(time.time, time.sleep)
-startTime = time.time()
+        print(
+            f"start {'converting' if args.convert_only else 'sending to device'} {interface if not args.convert_only else ''} ...")
+        print(f"writing output to {output_path}")
+        last_time = 0
 
-skip_rows = 0
+        for cnt, line in enumerate(valid_lines, 1):
+            ts, can_id, data, node_id = to_can_frame(line)
 
-canIds = {}
-nodeIds = {}
-lastTime = 0
-queue_max = 0
-num_lines = sum(1 for line in open(filepath))
+            if cnt == 1:
+                last_time = ts
 
-print("start sending to device {} ...".format(interface))
-with open("candump.log", "w") as logfile:
-    with open(filepath) as fp:
-        for cnt, line in enumerate(fp):
-            if cnt < skip_rows:
-                continue
-            if validLine(line):
-                ts, canId, data, nodeId = toCanFrame(line)
-                if cnt == skip_rows:
-                    lastTime = ts
-                assert ts > 0.0, "Wrong time increment";
-                if len(filterCanIds) == 0 or canId in filterCanIds:
-                    statistics(canIds, canId)
-                    statistics(nodeIds, nodeId)
+            if not filter_can_ids or can_id in filter_can_ids:
+                can_ids[can_id] += 1
+                node_ids[node_id] += 1
 
-                    dt = ts - lastTime
-                    ##time.sleep(dt)
-                    time_now = datetime.now().strftime("%H:%M:%S.%f")
-                    ##print("send at {}: canId={:04} data={}".format(time_now, canId, data.hex().upper()))
+                # write directly a file for canplayer
+                # "1563281268.048045) vcan0 78A#0A0C343602490000"
+                logfile.write(f"({start_time + ts:f}) {interface} {can_id:X}#{data.hex().upper()}\n")
+                if not args.convert_only:
+                    send_frame(sock, can_id, data)
+                    scheduler.enterabs(start_time + ts, 1, send_frame, (sock, can_id, data))
+                    queue_max = max(queue_max, len(scheduler.queue))
+                    scheduler.run()
+                last_time = ts
 
-                    # write directly a file for canplayer
-                    # "1563281268.048045) vcan0 78A#0A0C343602490000"
-                    logfile.write("({:f}) {:s} {:X}#{}\n".format(startTime + ts, interface, canId, data.hex().upper()))
-                    send(canId, data)
+            if cnt % 100 == 0 or cnt == num_lines:  # Update progress every 100 lines or at end
+                progress(cnt, num_lines, last_time)
 
-                    sched.enterabs(startTime + ts, 1, lambda x, y: send(x, y), (canId, data,))
-                    queue_max = max(queue_max,len(sched.queue))
-                    sched.run()
-                    lastTime = ts
-            progress(cnt, num_lines, lastTime)
+    print(f'\nqueue_max: {queue_max}')
+    print("canId statistics:")
+    print("Sorted by ID:", sorted(can_ids.items()))
+    print("Sorted by count:", sorted(can_ids.items(), key=lambda x: x[1], reverse=True))
+    print("nodeId statistics:")
+    print("Sorted by ID:", sorted(node_ids.items()))
+    print("Sorted by count:", sorted(node_ids.items(), key=lambda x: x[1], reverse=True))
 
-print('queue_max',queue_max)
-print("canId statistics")
-print(sorted(canIds.items(), key=lambda kv: kv[0], reverse=True))
-print(sorted(canIds.items(), key=lambda kv: kv[1], reverse=True))
-print("nodeId statistics")
-print(sorted(nodeIds.items(), key=lambda kv: kv[0], reverse=True))
-print(sorted(nodeIds.items(), key=lambda kv: kv[1], reverse=True))
+
+if __name__ == "__main__":
+    main()
